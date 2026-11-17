@@ -290,6 +290,16 @@
     0 0 12px rgba(52, 211, 153, 0.8);
 }
 
+.live-dot.checking {
+  background: #fbbf24;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.8);
+}
+
+.live-dot.disconnected {
+  background: #f87171;
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.8);
+}
+
 
 /* =========================================================
    HERO CONTENT

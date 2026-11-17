@@ -971,6 +971,18 @@ button {
   font-size: 14px;
 }
 
+.api-connection {
+  color: #fbbf24;
+}
+
+.api-connection.connected {
+  color: #34d399;
+}
+
+.api-connection.disconnected {
+  color: #f87171;
+}
+
 
 /* =========================================================
    SCROLLBAR

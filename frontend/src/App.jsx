@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -27,7 +27,26 @@ L.Icon.Default.mergeOptions({
 
 const kpkCenter = [34.2, 71.7];
 
-const API_URL = import.meta.env.VITE_API_URL || "/api";
+const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/+$/, "");
+const DISTRICT_ALIASES = {
+  "BAJAUR AGENCY": "BAJAUR",
+  "FR BANNU": "BANNU",
+  "FR DERA ISMAIL KHAN": "DERA ISMAIL KHAN",
+  "FR KOHAT": "KOHAT",
+  "FR LAKKI MARWAT": "LAKKI MARWAT",
+  "FR PESHAWAR": "PESHAWAR",
+  "FR TANK": "TANK",
+  "KHYBER AGENCY": "KHYBER",
+  "KURRAM AGENCY": "KURRAM",
+  "MOHMAND AGENCY": "MOHMAND",
+  "NORTH WAZIRISTAN AGENCY": "NORTH WAZIRISTAN",
+  "ORAKZAI AGENCY": "ORAKZAI",
+  "SOUTH WAZIRISTAN AGENCY": "SOUTH WAZIRISTAN",
+  "MALAKAND PA": "MALAKAND",
+  "TOR GHAR": "TORGHAR",
+  CHITRAL: "LOWER CHITRAL",
+  KOHISTAN: "UPPER KOHISTAN",
+};
 
 function MapClickHandler({ onLocationSelect }) {
   useMapEvents({
@@ -51,6 +70,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [backendStatus, setBackendStatus] = useState("checking");
+  const activeRequestRef = useRef(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     fetch("/kpk_districts.geojson")
@@ -72,23 +94,103 @@ function App() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_URL}/districts`)
-      .then((response) => {
+    let isMounted = true;
+    let retryTimeout;
+
+    const loadDistricts = async () => {
+      try {
+        const response = await fetch(`${API_URL}/districts`);
+
         if (!response.ok) {
           throw new Error("District data could not be loaded.");
         }
-        return response.json();
-      })
-      .then((data) => {
+
+        const data = await response.json();
+        if (!Array.isArray(data.districts)) {
+          throw new Error("Backend returned invalid district data.");
+        }
+
+        if (!isMounted) {
+          return;
+        }
+
         setDistrictsData(data.districts || []);
         setLoadingDistricts(false);
-      })
-      .catch((err) => {
+        setError((currentError) =>
+          currentError === "Backend se 35 districts ka data load nahi ho saka."
+            ? ""
+            : currentError
+        );
+      } catch (err) {
         console.error(err);
+        if (!isMounted) {
+          return;
+        }
+
         setError("Backend se 35 districts ka data load nahi ho saka.");
         setLoadingDistricts(false);
-      });
+        retryTimeout = window.setTimeout(() => {
+          if (isMounted) {
+            setLoadingDistricts(true);
+            loadDistricts();
+          }
+        }, 5000);
+      }
+    };
+
+    loadDistricts();
+
+    return () => {
+      isMounted = false;
+      window.clearTimeout(retryTimeout);
+    };
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const checkBackend = async () => {
+      try {
+        const response = await fetch(`${API_URL}/`, {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Backend health check failed (${response.status}).`);
+        }
+
+        const data = await response.json();
+
+        if (!data.message?.includes("API is running")) {
+          throw new Error("Backend returned an unexpected health response.");
+        }
+
+        if (isMounted) {
+          setBackendStatus("connected");
+        }
+      } catch (err) {
+        console.error("Backend connection check failed:", err);
+        if (isMounted) {
+          setBackendStatus("disconnected");
+        }
+      }
+    };
+
+    checkBackend();
+    const intervalId = window.setInterval(checkBackend, 15000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      activeRequestRef.current?.abort();
+    },
+    []
+  );
 
   const findDistrictData = (districtName) => {
     if (!districtName) {
@@ -102,6 +204,11 @@ function App() {
           districtName.trim().toLowerCase()
       ) || null
     );
+  };
+
+  const getCensusDistrictName = (mapDistrict) => {
+    const normalizedName = mapDistrict?.trim().toUpperCase();
+    return DISTRICT_ALIASES[normalizedName] || normalizedName;
   };
 
   const detectDistrict = (latitude, longitude) => {
@@ -125,12 +232,18 @@ function App() {
   };
 
   const handleLocationSelect = (latitude, longitude) => {
-    const district = detectDistrict(latitude, longitude);
+    activeRequestRef.current?.abort();
+    requestIdRef.current += 1;
+    setLoading(false);
 
-    setLocation({
+    const district = detectDistrict(latitude, longitude);
+    const selectedLocation = {
       lat: latitude,
       lng: longitude,
-    });
+    };
+    const censusDistrict = getCensusDistrictName(district);
+
+    setLocation(selectedLocation);
 
     const normalizedDistrict = district?.trim() || "";
 
@@ -138,32 +251,40 @@ function App() {
       normalizedDistrict || "KPK district not detected"
     );
 
-    const info = findDistrictData(normalizedDistrict);
+    const info = findDistrictData(censusDistrict);
 
     setDistrictInfo(info);
     setResult(null);
     setError("");
+
+    if (normalizedDistrict) {
+      analyzeBusiness({
+        location: selectedLocation,
+        area: normalizedDistrict,
+        district: info?.district || censusDistrict,
+      });
+    } else {
+      setError("Please KPK ke andar kisi location par click karein.");
+    }
   };
 
-  const analyzeBusiness = async () => {
-    if (!location) {
+  const analyzeBusiness = async (selection = null) => {
+    const selectedLocation = selection?.location || location;
+    const selectedArea = selection?.area || detectedArea;
+    const selectedDistrict =
+      selection?.district || districtInfo?.district || selectedArea;
+
+    if (!selectedLocation) {
       setError("Please map par kisi location par click karein.");
       return;
     }
 
     if (
-      !detectedArea ||
-      detectedArea === "KPK district not detected"
+      !selectedArea ||
+      selectedArea === "KPK district not detected"
     ) {
       setError(
         "Please KPK ke andar kisi location par click karein."
-      );
-      return;
-    }
-
-    if (!districtInfo) {
-      setError(
-        "Is district ka Census data available nahi hai."
       );
       return;
     }
@@ -172,6 +293,11 @@ function App() {
       setError("Please valid budget enter karein.");
       return;
     }
+
+    activeRequestRef.current?.abort();
+    const requestId = ++requestIdRef.current;
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
 
     setLoading(true);
     setError("");
@@ -184,15 +310,19 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          area: detectedArea,
-          district: districtInfo.district,
+          area: selectedArea,
+          district: selectedDistrict,
           budget: Number(budget),
-          latitude: location.lat,
-          longitude: location.lng,
+          latitude: selectedLocation.lat,
+          longitude: selectedLocation.lng,
         }),
+        signal: controller.signal,
       });
 
       const data = await response.json();
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(
@@ -205,17 +335,26 @@ function App() {
         return;
       }
 
-      console.log("AI Analysis Result:", data);
-
-      setResult(data);
+      if (requestId === requestIdRef.current) {
+        setResult(data);
+      }
     } catch (err) {
+      if (controller.signal.aborted || requestId !== requestIdRef.current) {
+        return;
+      }
+
       console.error("Prediction error:", err);
 
       setError(
-        "Backend se connection nahi ho saka. Check karein ke FastAPI server running hai."
+        err instanceof TypeError
+          ? "Backend se connection nahi ho saka. Check karein ke FastAPI server running hai."
+          : err.message || "Analysis failed."
       );
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        activeRequestRef.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -229,6 +368,7 @@ function App() {
   return (
     <div className="app">
       <KpkHero
+        backendStatus={backendStatus}
         onExplore={() =>
           document
             .getElementById("business-advisor")
@@ -253,6 +393,7 @@ function App() {
 
           <p className="instruction">
             Map par KPK ke andar kisi bhi location par click karein.
+            Analysis selected budget ke sath automatically chalega.
           </p>
 
           <div className="map-wrapper">
@@ -415,6 +556,14 @@ function App() {
           </div>
 
           <div className="district-status">
+            <p className={`api-connection ${backendStatus}`}>
+              Backend:{" "}
+              {backendStatus === "connected"
+                ? "Connected"
+                : backendStatus === "disconnected"
+                  ? "Disconnected - retrying"
+                  : "Connecting..."}
+            </p>
             {loadingDistricts ? (
               <p>Loading 35 KPK districts...</p>
             ) : (

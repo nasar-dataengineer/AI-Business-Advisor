@@ -16,7 +16,7 @@ const STATS = [
   },
 ];
 
-export default function KpkHero({ onExplore }) {
+export default function KpkHero({ onExplore, backendStatus = "checking" }) {
   const [activeStat, setActiveStat] = useState(0);
 
   useEffect(() => {
@@ -56,8 +56,12 @@ export default function KpkHero({ onExplore }) {
         </div>
 
         <div className="business-nav-status">
-          <span className="live-dot" />
-          AI Analysis Online
+          <span className={`live-dot ${backendStatus}`} />
+          {backendStatus === "connected"
+            ? "Backend Connected"
+            : backendStatus === "disconnected"
+              ? "Backend Offline"
+              : "Connecting to Backend"}
         </div>
       </nav>
 
