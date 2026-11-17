@@ -3,10 +3,15 @@
 **An AI-powered business intelligence platform for discovering promising business opportunities across Khyber Pakhtunkhwa (KPK), Pakistan.**
 
 This project combines machine learning, geographic data, and interactive maps to help users explore business locations and make data-informed decisions.
+## Application Preview
+
+![AI Business Advisor Homepage](docs/screenshots/homepage.png)
+
+---
 
 ## Project Overview
 
-Users can select a location on the KPK map, enter their available budget, and receive business recommendations with supporting opportunity analysis.
+Users can select a location on the KPK map, enter their available budget, and receive business recommendations with supporting opportunity analysis..
 
 ## Key Features
 
